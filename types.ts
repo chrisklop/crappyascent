@@ -13,6 +13,7 @@ export interface PlayerState {
 export interface ObstacleState {
   x: number;
   gapY: number; // Center of the gap
+  passed?: boolean; // Track if player has passed this obstacle
 }
 
 export interface ParticleState {

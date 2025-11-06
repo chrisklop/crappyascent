@@ -50,6 +50,8 @@ const GameContainer: React.FC = () => {
   const [difficultyLevel, setDifficultyLevel] = useState(0);
   const [powerUps, setPowerUps] = useState<PowerUpState[]>([]);
   const [activePowerUps, setActivePowerUps] = useState<ActivePowerUp[]>([]);
+  const [combo, setCombo] = useState(0);
+  const [comboFlash, setComboFlash] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const gameLoopRef = useRef<number>();
@@ -110,6 +112,8 @@ const GameContainer: React.FC = () => {
     setParticles([]);
     setPowerUps([]);
     setActivePowerUps([]);
+    setCombo(0);
+    setComboFlash(false);
     scoreAccumulatorRef.current = 0;
     powerUpSpawnAccumulatorRef.current = 0;
     setStatus('playing');
@@ -248,11 +252,14 @@ const GameContainer: React.FC = () => {
             setIsShaking(true);
             setTimeout(() => setIsShaking(false), 300);
 
+            // Reset combo on collision
+            setCombo(0);
+
             // Shield power-up protects from losing lives
             if (!hasShield) {
               nextPlayer.lives -= 1;
             }
-            
+
             if (nextPlayer.lives > 0) {
                 nextPlayer.invincibilityEndTime = time + 2000;
             } else {
@@ -260,6 +267,25 @@ const GameContainer: React.FC = () => {
                 nextPlayer.lives = 0;
             }
         }
+
+        // 7. Combo detection - check for successful passes
+        const playerRightEdge = nextPlayer.position.x + PLAYER_WIDTH;
+        nextObstacles.forEach(obstacle => {
+          // If player has passed the obstacle and it hasn't been marked as passed
+          if (playerRightEdge > obstacle.x + OBSTACLE_WIDTH && !obstacle.passed && !collisionOccurred) {
+            obstacle.passed = true;
+            // Increment combo
+            setCombo(c => {
+              const newCombo = c + 1;
+              // Flash effect on milestone combos
+              if (newCombo % 5 === 0) {
+                setComboFlash(true);
+                setTimeout(() => setComboFlash(false), 200);
+              }
+              return newCombo;
+            });
+          }
+        });
 
         finalPlayerPositionRef.current = nextPlayer.position;
         return { player: nextPlayer, obstacles: nextObstacles };
@@ -383,16 +409,23 @@ const GameContainer: React.FC = () => {
     const now = performance.now();
     setActivePowerUps(prev => prev.filter(p => p.expiresAt > now));
 
+    // Apply combo multiplier
+    let comboMultiplier = 1;
+    if (combo >= 15) comboMultiplier = 3;
+    else if (combo >= 10) comboMultiplier = 2;
+    else if (combo >= 5) comboMultiplier = 1.5;
+
     // Apply double points multiplier
-    const pointsMultiplier = hasDoublePoints ? 2 : 1;
-    scoreAccumulatorRef.current += currentSpeed * deltaTime * pointsMultiplier;
+    const powerUpMultiplier = hasDoublePoints ? 2 : 1;
+    const totalMultiplier = comboMultiplier * powerUpMultiplier;
+    scoreAccumulatorRef.current += currentSpeed * deltaTime * totalMultiplier;
     if(scoreAccumulatorRef.current > 10) {
         setScore(s => s + Math.floor(scoreAccumulatorRef.current / 10));
         scoreAccumulatorRef.current %= 10;
     }
 
     gameLoopRef.current = requestAnimationFrame(gameLoop);
-  }, [score, difficultyLevel, activePowerUps]);
+  }, [score, difficultyLevel, activePowerUps, combo]);
 
   useEffect(() => {
     if (status === 'playing') {
@@ -501,6 +534,33 @@ const GameContainer: React.FC = () => {
                 </div>
               );
             })}
+          </div>
+        )}
+        {status === 'playing' && combo > 0 && (
+          <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none ${comboFlash ? 'animate-ping' : ''}`}>
+            <div className="font-game text-center">
+              <div
+                className={`text-6xl font-bold mb-2 ${
+                  combo >= 15 ? 'text-purple-400' :
+                  combo >= 10 ? 'text-red-400' :
+                  combo >= 5 ? 'text-yellow-400' :
+                  'text-white'
+                }`}
+                style={{
+                  textShadow: '4px 4px #000',
+                  transform: comboFlash ? 'scale(1.3)' : 'scale(1)',
+                  transition: 'transform 0.2s'
+                }}
+              >
+                {combo}
+              </div>
+              <div className="text-sm text-yellow-300" style={{ textShadow: '2px 2px #000' }}>
+                {combo >= 15 ? '🔥 3X COMBO! 🔥' :
+                 combo >= 10 ? '⚡ 2X COMBO! ⚡' :
+                 combo >= 5 ? '✨ 1.5X COMBO! ✨' :
+                 'COMBO'}
+              </div>
+            </div>
           </div>
         )}
         {status === 'start' && <StartScreen />}
