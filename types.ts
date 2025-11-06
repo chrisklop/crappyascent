@@ -26,4 +26,19 @@ export interface ParticleState {
   color: string;
 }
 
+export type PowerUpType = 'shield' | 'slowmo' | 'doublepoints' | 'clearpipes';
+
+export interface PowerUpState {
+  id: number;
+  type: PowerUpType;
+  x: number;
+  y: number;
+  collected: boolean;
+}
+
+export interface ActivePowerUp {
+  type: PowerUpType;
+  expiresAt: number;
+}
+
 export type GameStatus = 'start' | 'playing' | 'gameOver';

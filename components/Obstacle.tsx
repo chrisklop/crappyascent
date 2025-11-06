@@ -1,9 +1,10 @@
 import React from 'react';
 import { ObstacleState } from '../types';
-import { OBSTACLE_GAP, OBSTACLE_WIDTH, GAME_HEIGHT } from '../constants';
+import { OBSTACLE_WIDTH, GAME_HEIGHT } from '../constants';
 
 interface ObstacleProps {
   obstacle: ObstacleState;
+  gapSize: number;
 }
 
 const Pipe: React.FC<{ height: number, position: 'top' | 'bottom' }> = ({ height, position }) => {
@@ -41,9 +42,9 @@ const Pipe: React.FC<{ height: number, position: 'top' | 'bottom' }> = ({ height
 };
 
 
-const Obstacle: React.FC<ObstacleProps> = ({ obstacle }) => {
-  const topPipeHeight = obstacle.gapY - OBSTACLE_GAP / 2;
-  const bottomPipeY = obstacle.gapY + OBSTACLE_GAP / 2;
+const Obstacle: React.FC<ObstacleProps> = ({ obstacle, gapSize }) => {
+  const topPipeHeight = obstacle.gapY - gapSize / 2;
+  const bottomPipeY = obstacle.gapY + gapSize / 2;
   const bottomPipeHeight = GAME_HEIGHT - bottomPipeY;
 
   return (

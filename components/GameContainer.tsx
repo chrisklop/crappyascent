@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { PlayerState, ObstacleState, GameStatus, ParticleState, Vector2D } from '../types';
+import { PlayerState, ObstacleState, GameStatus, ParticleState, Vector2D, PowerUpState, PowerUpType, ActivePowerUp } from '../types';
 import {
   GAME_HEIGHT,
   GAME_WIDTH,
@@ -18,9 +18,11 @@ import {
   MAX_PARTICLES,
   PARTICLE_COLORS,
 } from '../constants';
+import { getDifficultyLevel, getDifficultyMultipliers, getDifficultyDisplayName, getBackgroundDarknessMultiplier } from '../difficultyConfig';
 import Player from './Player';
 import Obstacle from './Obstacle';
 import Background from './Background';
+import PowerUp, { POWER_UP_SIZE } from './PowerUp';
 import AudioManager from '../utils/audio';
 
 interface GameState {
@@ -45,6 +47,9 @@ const GameContainer: React.FC = () => {
   const [particles, setParticles] = useState<ParticleState[]>([]);
   const [isShaking, setIsShaking] = useState(false);
   const [scale, setScale] = useState(1);
+  const [difficultyLevel, setDifficultyLevel] = useState(0);
+  const [powerUps, setPowerUps] = useState<PowerUpState[]>([]);
+  const [activePowerUps, setActivePowerUps] = useState<ActivePowerUp[]>([]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const gameLoopRef = useRef<number>();
@@ -53,6 +58,8 @@ const GameContainer: React.FC = () => {
   const scoreAccumulatorRef = useRef(0);
   const particleSpawnAccumulatorRef = useRef(0);
   const thrustSoundAccumulatorRef = useRef(0);
+  const powerUpSpawnAccumulatorRef = useRef(0);
+  const nextPowerUpIdRef = useRef(0);
   const statusRef = useRef(status);
   const finalPlayerPositionRef = useRef<Vector2D>(gameState.player.position);
   const audioManagerRef = useRef<AudioManager | null>(null);
@@ -101,7 +108,10 @@ const GameContainer: React.FC = () => {
     setScore(0);
     setScrollX(0);
     setParticles([]);
+    setPowerUps([]);
+    setActivePowerUps([]);
     scoreAccumulatorRef.current = 0;
+    powerUpSpawnAccumulatorRef.current = 0;
     setStatus('playing');
   }, []);
 
@@ -124,8 +134,31 @@ const GameContainer: React.FC = () => {
       return;
     }
 
-    const deltaTime = (time - lastTimeRef.current) / 1000;
+    let deltaTime = (time - lastTimeRef.current) / 1000;
     lastTimeRef.current = time;
+
+    // Apply slow-mo power-up
+    const hasSlowMo = activePowerUps.some(p => p.type === 'slowmo');
+    if (hasSlowMo) {
+      deltaTime *= 0.5; // Slow down game by 50%
+    }
+
+    // Check for other active power-ups
+    const hasShield = activePowerUps.some(p => p.type === 'shield');
+    const hasDoublePoints = activePowerUps.some(p => p.type === 'doublepoints');
+
+    // Calculate difficulty multipliers based on current score
+    const currentDifficultyLevel = getDifficultyLevel(score);
+    const { speedMultiplier, gapSizeMultiplier, obstacleSpacingMultiplier } = getDifficultyMultipliers(currentDifficultyLevel);
+
+    // Update difficulty level if changed
+    if (currentDifficultyLevel !== difficultyLevel) {
+      setDifficultyLevel(currentDifficultyLevel);
+    }
+
+    // Apply difficulty to game constants
+    const currentSpeed = PLAYER_HORIZONTAL_SPEED * speedMultiplier;
+    const currentGap = OBSTACLE_GAP * gapSizeMultiplier;
 
     setGameState(gs => {
         // 1. Update obstacles
@@ -139,17 +172,17 @@ const GameContainer: React.FC = () => {
         });
 
         const nextObstacles = gs.obstacles.map(o => {
-            let newX = o.x - PLAYER_HORIZONTAL_SPEED * deltaTime;
+            let newX = o.x - currentSpeed * deltaTime;
             if (newX < -OBSTACLE_WIDTH) {
                 const lastGapY = rightmostObstacle ? rightmostObstacle.gapY : GAME_HEIGHT / 2;
                 const change = (Math.random() - 0.5) * (GAME_HEIGHT / 3);
                 let newGapY = lastGapY + change;
 
-                const minGapY = OBSTACLE_GAP / 2 + 50;
-                const maxGapY = GAME_HEIGHT - OBSTACLE_GAP / 2 - 50;
+                const minGapY = currentGap / 2 + 50;
+                const maxGapY = GAME_HEIGHT - currentGap / 2 - 50;
                 newGapY = Math.max(minGapY, Math.min(newGapY, maxGapY));
-                
-                const interval = OBSTACLE_BASE_INTERVAL + Math.random() * OBSTACLE_INTERVAL_VARIANCE;
+
+                const interval = (OBSTACLE_BASE_INTERVAL + Math.random() * OBSTACLE_INTERVAL_VARIANCE) * obstacleSpacingMultiplier;
                 newX = maxObsX + OBSTACLE_WIDTH + interval;
                 return { ...o, x: newX, gapY: newGapY };
             }
@@ -189,8 +222,8 @@ const GameContainer: React.FC = () => {
             else {
                 const playerRect = { x: nextPlayer.position.x, y: nextPlayer.position.y, width: PLAYER_WIDTH, height: PLAYER_HEIGHT };
                 for (const o of nextObstacles) {
-                    const topPipeRect = { x: o.x, y: 0, width: OBSTACLE_WIDTH, height: o.gapY - OBSTACLE_GAP / 2 };
-                    const bottomPipeRect = { x: o.x, y: o.gapY + OBSTACLE_GAP / 2, width: OBSTACLE_WIDTH, height: GAME_HEIGHT - (o.gapY + OBSTACLE_GAP / 2) };
+                    const topPipeRect = { x: o.x, y: 0, width: OBSTACLE_WIDTH, height: o.gapY - currentGap / 2 };
+                    const bottomPipeRect = { x: o.x, y: o.gapY + currentGap / 2, width: OBSTACLE_WIDTH, height: GAME_HEIGHT - (o.gapY + currentGap / 2) };
                     
                     const hitTopPipe = playerRect.x < topPipeRect.x + topPipeRect.width && playerRect.x + playerRect.width > topPipeRect.x && playerRect.y < topPipeRect.y + topPipeRect.height;
                     const hitBottomPipe = playerRect.x < bottomPipeRect.x + bottomPipeRect.width && playerRect.x + playerRect.width > bottomPipeRect.x && playerRect.y + playerRect.height > bottomPipeRect.y;
@@ -214,8 +247,11 @@ const GameContainer: React.FC = () => {
             audioManagerRef.current?.playCollisionSound();
             setIsShaking(true);
             setTimeout(() => setIsShaking(false), 300);
-            
-            nextPlayer.lives -= 1;
+
+            // Shield power-up protects from losing lives
+            if (!hasShield) {
+              nextPlayer.lives -= 1;
+            }
             
             if (nextPlayer.lives > 0) {
                 nextPlayer.invincibilityEndTime = time + 2000;
@@ -229,7 +265,7 @@ const GameContainer: React.FC = () => {
         return { player: nextPlayer, obstacles: nextObstacles };
     });
 
-    setScrollX(s => s + PLAYER_HORIZONTAL_SPEED * deltaTime);
+    setScrollX(s => s + currentSpeed * deltaTime);
 
     if (isThrustingRef.current) {
       // Particle logic
@@ -241,7 +277,7 @@ const GameContainer: React.FC = () => {
           id: Math.random(),
           x: finalPlayerPositionRef.current.x + PLAYER_WIDTH * 0.7,
           y: finalPlayerPositionRef.current.y + PLAYER_HEIGHT * 0.5,
-          vx: -PLAYER_HORIZONTAL_SPEED - 100 - Math.random() * 80,
+          vx: -currentSpeed - 100 - Math.random() * 80,
           vy: (Math.random() - 0.5) * 120,
           life: 0.8 + Math.random() * 0.6,
           size: Math.random() * 8 + 4,
@@ -266,14 +302,97 @@ const GameContainer: React.FC = () => {
         life: p.life - deltaTime * 1.2,
     })).filter(p => p.life > 0));
 
-    scoreAccumulatorRef.current += PLAYER_HORIZONTAL_SPEED * deltaTime;
+    // Power-up spawning
+    powerUpSpawnAccumulatorRef.current += currentSpeed * deltaTime;
+    const POWER_UP_SPAWN_DISTANCE = 600; // Spawn every 600 pixels of scroll
+    if (powerUpSpawnAccumulatorRef.current > POWER_UP_SPAWN_DISTANCE) {
+      powerUpSpawnAccumulatorRef.current = 0;
+
+      // Random power-up type
+      const types: PowerUpType[] = ['shield', 'slowmo', 'doublepoints', 'clearpipes'];
+      const randomType = types[Math.floor(Math.random() * types.length)];
+
+      const newPowerUp: PowerUpState = {
+        id: nextPowerUpIdRef.current++,
+        type: randomType,
+        x: GAME_WIDTH + 50,
+        y: 100 + Math.random() * (GAME_HEIGHT - 200),
+        collected: false
+      };
+
+      setPowerUps(prev => [...prev, newPowerUp]);
+    }
+
+    // Move and clean up power-ups
+    setPowerUps(prev => prev
+      .map(p => ({ ...p, x: p.x - currentSpeed * deltaTime }))
+      .filter(p => p.x > -POWER_UP_SIZE && !p.collected)
+    );
+
+    // Power-up collision detection
+    const playerRect = {
+      x: finalPlayerPositionRef.current.x,
+      y: finalPlayerPositionRef.current.y,
+      width: PLAYER_WIDTH,
+      height: PLAYER_HEIGHT
+    };
+
+    setPowerUps(prev => {
+      const now = performance.now();
+      return prev.map(powerUp => {
+        if (!powerUp.collected) {
+          const powerUpRect = {
+            x: powerUp.x,
+            y: powerUp.y,
+            width: POWER_UP_SIZE,
+            height: POWER_UP_SIZE
+          };
+
+          const isColliding =
+            playerRect.x < powerUpRect.x + powerUpRect.width &&
+            playerRect.x + playerRect.width > powerUpRect.x &&
+            playerRect.y < powerUpRect.y + powerUpRect.height &&
+            playerRect.y + playerRect.height > powerUpRect.y;
+
+          if (isColliding) {
+            // Activate power-up
+            const duration = powerUp.type === 'clearpipes' ? 0 : 5000; // clearpipes is instant
+
+            if (powerUp.type === 'clearpipes') {
+              // Clear next 3 obstacles
+              setGameState(gs => ({
+                ...gs,
+                obstacles: gs.obstacles.slice(3)
+              }));
+            } else {
+              setActivePowerUps(active => {
+                // Remove existing power-up of same type
+                const filtered = active.filter(a => a.type !== powerUp.type);
+                return [...filtered, { type: powerUp.type, expiresAt: now + duration }];
+              });
+            }
+
+            return { ...powerUp, collected: true };
+          }
+        }
+        return powerUp;
+      });
+    });
+
+    // Remove expired power-ups
+    const now = performance.now();
+    setActivePowerUps(prev => prev.filter(p => p.expiresAt > now));
+
+    // Apply double points multiplier
+    const pointsMultiplier = hasDoublePoints ? 2 : 1;
+    scoreAccumulatorRef.current += currentSpeed * deltaTime * pointsMultiplier;
     if(scoreAccumulatorRef.current > 10) {
         setScore(s => s + Math.floor(scoreAccumulatorRef.current / 10));
         scoreAccumulatorRef.current %= 10;
     }
 
     gameLoopRef.current = requestAnimationFrame(gameLoop);
-  }, []);
+  }, [score, difficultyLevel, activePowerUps]);
 
   useEffect(() => {
     if (status === 'playing') {
@@ -319,11 +438,18 @@ const GameContainer: React.FC = () => {
 
   const isInvincible = status === 'playing' && performance.now() < gameState.player.invincibilityEndTime;
 
+  const darknessMultiplier = getBackgroundDarknessMultiplier(difficultyLevel);
+  const difficultyDisplayName = getDifficultyDisplayName(difficultyLevel);
+
   return (
     <div ref={containerRef} style={{ width: GAME_WIDTH, height: GAME_HEIGHT, transform: `scale(${scale})`, transformOrigin: 'center center' }}>
         <div
         className={`relative bg-sky-300 overflow-hidden border-8 border-amber-800 rounded-lg shadow-2xl ${isShaking ? 'animate-shake' : ''}`}
-        style={{ width: GAME_WIDTH, height: GAME_HEIGHT }}
+        style={{
+          width: GAME_WIDTH,
+          height: GAME_HEIGHT,
+          filter: `brightness(${1 - darknessMultiplier})`
+        }}
         >
         <Background scrollX={scrollX} status={status} />
         {particles.map(p => (
@@ -338,8 +464,13 @@ const GameContainer: React.FC = () => {
             }} />
         ))}
         {status !== 'start' && <Player player={gameState.player} isInvincible={isInvincible} />}
-        {status === 'playing' && gameState.obstacles.map((obs, index) => (
-            <Obstacle key={`${obs.x}-${index}`} obstacle={obs} />
+        {status === 'playing' && gameState.obstacles.map((obs, index) => {
+            const { gapSizeMultiplier } = getDifficultyMultipliers(difficultyLevel);
+            const adjustedGap = OBSTACLE_GAP * gapSizeMultiplier;
+            return <Obstacle key={`${obs.x}-${index}`} obstacle={obs} gapSize={adjustedGap} />;
+        })}
+        {status === 'playing' && powerUps.filter(p => !p.collected).map(powerUp => (
+            <PowerUp key={powerUp.id} powerUp={powerUp} />
         ))}
         <div className="absolute top-0 left-0 right-0 p-3 font-game text-white text-lg z-20 flex justify-between items-center" style={{ textShadow: '2px 2px #000' }}>
             <span>SCORE:{score.toString().padStart(6, '0')}</span>
@@ -348,6 +479,30 @@ const GameContainer: React.FC = () => {
          <div className="absolute bottom-2 right-2 font-game text-yellow-300 text-sm z-20" style={{ textShadow: '2px 2px #000' }}>
             HI:{highScore.toString().padStart(6, '0')}
         </div>
+        {status === 'playing' && difficultyLevel > 0 && (
+          <div className="absolute bottom-2 left-2 font-game text-orange-400 text-xs z-20" style={{ textShadow: '2px 2px #000' }}>
+            {difficultyDisplayName}
+          </div>
+        )}
+        {status === 'playing' && activePowerUps.length > 0 && (
+          <div className="absolute top-14 right-2 flex flex-col gap-1 z-20">
+            {activePowerUps.map((powerUp, index) => {
+              const timeLeft = Math.max(0, powerUp.expiresAt - performance.now());
+              const secondsLeft = Math.ceil(timeLeft / 1000);
+              const config = { shield: '🛡️', slowmo: '💨', doublepoints: '✨', clearpipes: '🪠' };
+              return (
+                <div
+                  key={`${powerUp.type}-${index}`}
+                  className="bg-black bg-opacity-70 px-2 py-1 rounded flex items-center gap-1 font-game text-xs text-white"
+                  style={{ textShadow: '1px 1px #000' }}
+                >
+                  <span className="text-base">{config[powerUp.type]}</span>
+                  <span>{secondsLeft}s</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
         {status === 'start' && <StartScreen />}
         {status === 'gameOver' && <GameOverScreen score={score} highScore={highScore} />}
         </div>
